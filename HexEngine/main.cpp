@@ -1,4 +1,5 @@
 #include <iostream>
+#include <cstring>
 
 using namespace std;
 
@@ -21,7 +22,7 @@ using namespace std;
 #define getEnpassant(move) ((move >> 20) & 0x1)
 #define getCastling(move) ((move >> 21) & 0x1)
 
-enum Piece { e, P, N, B, R, Q, K, p, n, b, r, q, k };
+enum Piece { e, P, N, B, R, Q, K, p, n, b, r, q, k, o };
 enum Side { white, black };
 enum Castling { wk = 1, wq = 2, bk = 4, bq = 8 };
 
@@ -58,6 +59,17 @@ int board[128] = {
     R, N, B, Q, K, B, N, R,    0,  0,  5,  5,  0,  0,  5,  0
 };
 
+int castlingRights[128] = {
+     7, 15, 15, 15,  3, 15, 15, 11,  o, o, o, o, o, o, o, o,
+    15, 15, 15, 15, 15, 15, 15, 15,  o, o, o, o, o, o, o, o,
+    15, 15, 15, 15, 15, 15, 15, 15,  o, o, o, o, o, o, o, o,
+    15, 15, 15, 15, 15, 15, 15, 15,  o, o, o, o, o, o, o, o,
+    15, 15, 15, 15, 15, 15, 15, 15,  o, o, o, o, o, o, o, o,
+    15, 15, 15, 15, 15, 15, 15, 15,  o, o, o, o, o, o, o, o,
+    15, 15, 15, 15, 15, 15, 15, 15,  o, o, o, o, o, o, o, o,
+    13, 15, 15, 15, 12, 15, 15, 14,  o, o, o, o, o, o, o, o
+};
+
 string pieces[] = {".", "♙", "♘", "♗", "♖", "♕", "♔", "♟︎", "♞", "♝", "♜", "♛", "♚"};
 
 int side = white;
@@ -71,10 +83,26 @@ typedef struct {
     int count;
 } MoveList;
 
+typedef struct {
+    int board[64][128];
+    int kingSq[64][2];
+    int side[64];
+    int castling[64];
+    int enpassant[64];
+} Undo;
+
+Undo undo[1];
+
 int knightOffsets[8] = {33, 31, 18, 14, -33, -31, -18, -14};
 int bishopOffsets[4] = {15, 17, -15, -17};
 int rookOffsets[4] = {16, -16, 1, -1};
 int kingOffsets[8] = {16, -16, 1, -1, 15, 17, -15, -17};
+
+int kingSq[] = { e1, e8 };
+
+long nodes = 0;
+
+int ply = 0;
 
 void PrintBoard()
 {
@@ -299,16 +327,225 @@ static inline void GenerateMoves(MoveList* moves)
                 {
                     if (castling & bk)
                         if (!board[f8] && !board[g8])
-                            if (!isSqAttacked(e8, black) && !isSqAttacked(f8, black))
+                            if (!isSqAttacked(e8, white) && !isSqAttacked(f8, white))
                                 AddMove(moves, Move(e8, g8, 0, 0, 0, 0, 1));
 
                     if (castling & bq)
                         if (!board[b8] && !board[c8] && !board[d8])
-                            if (!isSqAttacked(e8, black) && !isSqAttacked(d8, black))
+                            if (!isSqAttacked(e8, white) && !isSqAttacked(d8, white))
                                 AddMove(moves, Move(e8, c8, 0, 0, 0, 0, 1));
                 }
             }
+
+            if (side == white ? board[sq] == N : board[sq] == n)
+            {
+                for (int dir = 0; dir < 8; dir++)
+                {
+                    int toSq = sq + knightOffsets[dir];
+
+                    if (!(toSq & 0x88))
+                    {
+                        int p = board[toSq];
+
+                        if (side == white ? (!p || (p >= 7 && p <= 12)) : (!p || (p >= 1 && p <= 6)))
+                        {
+                            if (p)
+                                AddMove(moves, Move(sq, toSq, 0, 1, 0, 0, 0));
+                            else
+                                AddMove(moves, Move(sq, toSq, 0, 0, 0, 0, 0));
+                        }
+                    }
+                }
+            }
+
+            if (side == white ? board[sq] == K : board[sq] == k)
+            {
+                for (int dir = 0; dir < 8; dir++)
+                {
+                    int toSq = sq + kingOffsets[dir];
+
+                    if (!(toSq & 0x88))
+                    {
+                        int p = board[toSq];
+
+                        if (side == white ? (!p || (p >= 7 && p <= 12)) : (!p || (p >= 1 && p <= 6)))
+                        {
+                            if (p)
+                                AddMove(moves, Move(sq, toSq, 0, 1, 0, 0, 0));
+                            else
+                                AddMove(moves, Move(sq, toSq, 0, 0, 0, 0, 0));
+                        }
+                    }
+                }
+            }
+
+            if (side == white ? board[sq] == B || board[sq] == Q : board[sq] == n || board[sq] == q)
+            {
+                for (int dir = 0; dir < 4; dir++)
+                {
+                    int toSq = sq + bishopOffsets[dir];
+
+                    while (!(toSq & 0x88))
+                    {
+                        int p = board[toSq];
+
+                        if (side == white ? (p >= 1 && p <= 6) : (p >= 7 && p <= 12))
+                            break;
+
+                        if (side == white ? (p >= 7 && p <= 12) : (p >= 1 && p <= 6))
+                        {
+                            AddMove(moves, Move(sq, toSq, 0, 1, 0, 0, 0));
+                            break;
+                        }
+
+                        if (!p)
+                            AddMove(moves, Move(sq, toSq, 0, 0, 0, 0, 0));
+
+                        toSq += bishopOffsets[dir];
+                    }
+                }
+            }
+
+            if (side == white ? board[sq] == R || board[sq] == Q : board[sq] == r || board[sq] == q)
+            {
+                for (int dir = 0; dir < 4; dir++)
+                {
+                    int toSq = sq + rookOffsets[dir];
+
+                    while (!(toSq & 0x88))
+                    {
+                        int p = board[toSq];
+
+                        if (side == white ? (p >= 1 && p <= 6) : (p >= 7 && p <= 12))
+                            break;
+
+                        if (side == white ? (p >= 7 && p <= 12) : (p >= 1 && p <= 6))
+                        {
+                            AddMove(moves, Move(sq, toSq, 0, 1, 0, 0, 0));
+                            break;
+                        }
+
+                        if (!p)
+                            AddMove(moves, Move(sq, toSq, 0, 0, 0, 0, 0));
+
+                        toSq += rookOffsets[dir];
+                    }
+                }
+            }
         }
+    }
+}
+
+static inline void CopyBoard()
+{
+    memcpy(undo->board[ply], board, 512);
+    memcpy(undo->kingSq[ply], kingSq, 8);
+    
+    undo->side[ply] = side;
+    undo->castling[ply] = castling;
+    undo->enpassant[ply] = enpassant;
+
+    ply++;
+}
+
+static inline void TakeBack()
+{
+    ply--;
+
+    memcpy(board, undo->board[ply], 512);
+    memcpy(kingSq, undo->kingSq[ply], 8);
+    
+    side = undo->side[ply];
+    castling = undo->castling[ply];
+    enpassant = undo->enpassant[ply];
+}
+
+static inline int MakeMove(int move)
+{
+    CopyBoard();
+
+    int from = getSource(move);
+    int to = getTarget(move);
+    int promoted = getPromoted(move);
+    int doublePush = getDoublePawn(move);
+    int ep = getEnpassant(move);
+    int ca = getCastling(move);
+
+    board[to] = board[from];
+    board[from] = e;
+
+    if (promoted)
+        board[to] = promoted;
+
+    if (ep)
+        side == white ? board[to + 16] = e : board[to - 16] = e;
+
+    enpassant = noSq;
+
+    if (doublePush)
+        side == white ? enpassant = to + 16 : enpassant = to - 16;
+
+    if (ca)
+    {
+        switch (to)
+        {
+        case g1:
+            board[f1] = board[h1];
+            board[h1] = e;
+            break;
+        case c1:
+            board[d1] = board[a1];
+            board[a1] = e;
+            break;
+        case g8:
+            board[f8] = board[h8];
+            board[h8] = e;
+            break;
+        case c8:
+            board[d8] = board[a8];
+            board[a8] = e;
+            break;
+        }
+    }
+
+    if (board[to] == K || board[to] == k)
+        kingSq[side] = to;
+
+    castling &= castlingRights[from];
+    castling &= castlingRights[to];
+
+    side ^= 1;
+
+    if (isSqAttacked(kingSq[side ^ 1], side))
+    {
+        TakeBack();
+        return 0;
+    }
+    else
+        return 1;
+}
+
+static inline void perft(int depth)
+{
+    if (depth == 0)
+    {
+        nodes++;
+        return;
+    }
+
+    MoveList moves[1];
+    GenerateMoves(moves);
+
+    for (int i = 0; i < moves->count; i++)
+    {
+        CopyBoard();
+
+        if(!MakeMove(moves->moves[i]))
+            continue;
+
+        perft(depth - 1);
+
+        TakeBack();
     }
 }
 
@@ -316,8 +553,11 @@ int main()
 {
 	PrintBoard();
 
-    MoveList moves[1];
-    GenerateMoves(moves);
+    perft(2);
+
+    cout << "Nodes: " << nodes << endl;
+
+    PrintBoard();
 
 	return 0;
 }
