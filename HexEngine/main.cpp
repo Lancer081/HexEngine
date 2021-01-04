@@ -72,6 +72,8 @@ int castlingRights[128] = {
 
 string pieces[] = {".", "♙", "♘", "♗", "♖", "♕", "♔", "♟︎", "♞", "♝", "♜", "♛", "♚"};
 
+int pieceWeights[] = { 0, 100, 300, 325, 500, 900, 10000, -100, -300, -325, -500, -900, -10000 };
+
 int side = white;
 int castling = 0;
 int enpassant = 0;
@@ -103,6 +105,9 @@ int kingSq[] = { e1, e8 };
 long nodes = 0;
 
 int ply = 0;
+
+int pvTable[64][64];
+int pvLength[64];
 
 void PrintBoard()
 {
@@ -444,14 +449,10 @@ static inline void CopyBoard()
     undo->side[ply] = side;
     undo->castling[ply] = castling;
     undo->enpassant[ply] = enpassant;
-
-    ply++;
 }
 
 static inline void TakeBack()
 {
-    ply--;
-
     memcpy(board, undo->board[ply], 512);
     memcpy(kingSq, undo->kingSq[ply], 8);
     
@@ -543,21 +544,94 @@ static inline void perft(int depth)
         if(!MakeMove(moves->moves[i]))
             continue;
 
+        ply++;
+
         perft(depth - 1);
+
+        ply--;
 
         TakeBack();
     }
+}
+
+static inline int Eval()
+{
+    int score = 0;
+
+    for (int sq = 0; sq < 128; sq++)
+    {
+        if (!(sq & 0x88))
+        {
+            if (board[sq])
+            {
+                score += pieceWeights[board[sq]];
+                
+                if (board[sq] >= 7 && board[sq] <= 12)
+                    score += board[sq + 8];
+                else
+                    score -= board[sq + 8];
+            }
+        }
+    }
+
+    return score;
+}
+
+static inline int Negamax(int depth, int alpha, int beta)
+{
+    pvLength[ply] = ply;
+
+    if (depth == 0)
+        return Eval();
+
+    MoveList moves[1];
+    GenerateMoves(moves);
+
+    int score = 0;
+
+    for (int i = 0; i < moves->count; i++)
+    {
+        CopyBoard();
+
+        if (!MakeMove(moves->moves[i]))
+            continue;
+
+        ply++;
+
+        score = -Negamax(depth - 1, -beta, -alpha);
+
+        ply--;
+
+        TakeBack();
+
+        if (score >= beta)
+            return beta;
+
+        if (score > alpha)
+        {
+            alpha = score;
+
+            pvTable[ply][ply] = moves->moves[i];
+
+            for (int nextPly = ply + 1; nextPly < pvLength[ply + 1]; nextPly++)
+                pvTable[ply][nextPly] = pvTable[ply + 1][nextPly];
+
+            pvLength[ply] = pvLength[ply + 1];
+        }
+    }
+
+    return alpha;
 }
 
 int main()
 {
 	PrintBoard();
 
-    perft(2);
+    int score = Negamax(4, -50000, 50000);
 
+    cout << "Score: " << score << endl;
     cout << "Nodes: " << nodes << endl;
-
-    PrintBoard();
+    cout << "BestMove: " << notation[getSource(pvTable[0][0])] << notation[getTarget(pvTable[0][0])] << endl;
 
 	return 0;
 }
